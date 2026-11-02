@@ -1,8 +1,35 @@
 # KeuanganKu
 
+<p align="center">
+  <img src="assets/screenshots/hero.png" alt="KeuanganKu — Aplikasi pencatat keuangan pribadi offline-first" width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20PWA-2563eb" alt="Platform Android | PWA">
+  <img src="https://img.shields.io/badge/Mode-Offline--First-10b981" alt="Offline-First">
+  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License MIT">
+</p>
+
 Aplikasi pencatat pemasukan dan pengeluaran harian offline-first untuk **Android & PWA** (Progressive Web App). Dibangun menggunakan arsitektur Vanilla (HTML5, Vanilla CSS, dan JavaScript murni tanpa framework tambahan) serta dibungkus dengan [Capacitor 6](https://capacitorjs.com/) menjadi aplikasi Android native yang ringan, cepat, dan mandiri.
 
 Semua data tersimpan secara lokal di perangkat Anda (`localStorage`), tanpa server backend, tanpa akun, tanpa pelacakan, dan 100% dapat digunakan tanpa koneksi internet.
+
+---
+
+## Tampilan Aplikasi
+
+<p align="center">
+  <img src="assets/screenshots/preview-home-dark.png" alt="Beranda — Mode Gelap" width="260">
+  <img src="assets/screenshots/preview-home-light.png" alt="Beranda — Mode Terang" width="260">
+  <img src="assets/screenshots/preview-transaksi.png" alt="Daftar Transaksi" width="260">
+</p>
+<p align="center">
+  <img src="assets/screenshots/preview-anggaran.png" alt="Anggaran & Komposisi Pengeluaran" width="260">
+  <img src="assets/screenshots/preview-laporan.png" alt="Laporan & Ekspor" width="260">
+</p>
+<p align="center">
+  <em>Beranda (gelap & terang) • Transaksi • Anggaran per kategori • Laporan</em>
+</p>
 
 ---
 
