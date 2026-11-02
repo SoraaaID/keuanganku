@@ -642,6 +642,22 @@ async function shareTextSummary() {
 }
 
 /**
+ * Sanitasi nilai sel untuk mencegah CSV / Spreadsheet Formula Injection
+ * @param {*} val
+ * @returns {string}
+ */
+function sanitizeCSVCell(val) {
+  if (val === null || val === undefined) return '""';
+  let str = String(val).replace(/"/g, '""');
+  // Cegah eksekusi formula di Excel / Google Sheets jika diawali =, +, -, @, tab, carriage return
+  const isFormula = /^[=+\-@\t\r]/.test(str);
+  if (isFormula) {
+    str = "'" + str;
+  }
+  return `"${str}"`;
+}
+
+/**
  * Format CSV: simpan lewat helper (utf8, tambahkan BOM \uFEFF agar terbuka benar di Excel)
  */
 async function exportToCSV() {
@@ -656,14 +672,14 @@ async function exportToCSV() {
     const rows = txs.map(item => {
       const cat = getCategoryInfo(item.type, item.category);
       return [
-        `"${item.id}"`,
-        `"${item.date}"`,
-        `"${item.time || ''}"`,
-        `"${item.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}"`,
-        `"${cat.name}"`,
-        `"${(item.title || '').replace(/"/g, '""')}"`,
-        item.amount,
-        `"${(item.notes || '').replace(/"/g, '""')}"`
+        sanitizeCSVCell(item.id),
+        sanitizeCSVCell(item.date),
+        sanitizeCSVCell(item.time || ''),
+        sanitizeCSVCell(item.type === 'income' ? 'Pemasukan' : 'Pengeluaran'),
+        sanitizeCSVCell(cat.name),
+        sanitizeCSVCell(item.title),
+        Number.isFinite(Number(item.amount)) ? Number(item.amount) : 0,
+        sanitizeCSVCell(item.notes)
       ];
     });
 
@@ -914,4 +930,12 @@ async function printReport() {
     console.error('Gagal mencetak laporan via PdfPrint:', err);
     if (typeof showToast === 'function') showToast('Gagal memproses cetak: ' + err.message, 'danger');
   }
+}
+
+
+// Ekspor untuk pengujian Node.js jika CommonJS
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    sanitizeCSVCell
+  };
 }

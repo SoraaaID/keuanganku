@@ -312,7 +312,7 @@ function renderRecentTransactions() {
     const amountPrefix = isIncome ? '+ ' : '- ';
 
     return `
-      <div class="recent-tx-item" data-id="${escapeHtml(item.id)}" onclick="openEditModal('${escapeHtml(item.id)}')" style="cursor: pointer;" title="Klik untuk edit transaksi">
+      <div class="recent-tx-item" data-id="${escapeHtml(item.id)}" data-action="edit" style="cursor: pointer;" title="Klik untuk edit transaksi">
         <div class="recent-tx-icon-wrap" style="background: ${cat.color}14; color: ${cat.color};">
           <i class="fa-solid ${cat.icon}"></i>
         </div>
@@ -387,10 +387,10 @@ function renderTransactionsTable() {
           </td>
           <td class="text-center">
             <div class="action-buttons-group">
-              <button class="action-btn edit-btn" onclick="openEditModal('${escapeHtml(item.id)}')" title="Edit Transaksi" aria-label="Edit Transaksi">
+              <button class="action-btn edit-btn" data-action="edit" data-id="${escapeHtml(item.id)}" title="Edit Transaksi" aria-label="Edit Transaksi">
                 <i class="fa-regular fa-pen-to-square"></i>
               </button>
-              <button class="action-btn delete-btn" onclick="confirmDelete('${escapeHtml(item.id)}')" title="Hapus Transaksi" aria-label="Hapus Transaksi">
+              <button class="action-btn delete-btn" data-action="delete" data-id="${escapeHtml(item.id)}" title="Hapus Transaksi" aria-label="Hapus Transaksi">
                 <i class="fa-regular fa-trash-can"></i>
               </button>
             </div>
@@ -430,10 +430,10 @@ function renderTransactionsTable() {
               ${amountPrefix}${formatRupiah(item.amount)}
             </div>
             <div class="mobile-tx-actions">
-              <button class="action-btn edit-btn" onclick="openEditModal('${escapeHtml(item.id)}')" title="Edit Transaksi" aria-label="Edit Transaksi">
+              <button class="action-btn edit-btn" data-action="edit" data-id="${escapeHtml(item.id)}" title="Edit Transaksi" aria-label="Edit Transaksi">
                 <i class="fa-regular fa-pen-to-square"></i>
               </button>
-              <button class="action-btn delete-btn" onclick="confirmDelete('${escapeHtml(item.id)}')" title="Hapus Transaksi" aria-label="Hapus Transaksi">
+              <button class="action-btn delete-btn" data-action="delete" data-id="${escapeHtml(item.id)}" title="Hapus Transaksi" aria-label="Hapus Transaksi">
                 <i class="fa-regular fa-trash-can"></i>
               </button>
             </div>

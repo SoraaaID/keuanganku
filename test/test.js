@@ -21,6 +21,8 @@ const {
   generateSampleData
 } = require('../js/data.js');
 
+const { sanitizeCSVCell } = require('../js/export.js');
+
 let totalTests = 0;
 let passedTests = 0;
 
@@ -250,6 +252,31 @@ test('validateTransactionsImport menolak item dengan title kosong', () => {
   assert.strictEqual(res.skipped, 1);
 });
 
+test('validateTransactionsImport menolak item dengan ID berbahaya / XSS payload', () => {
+  const maliciousIdData = [
+    {
+      id: "');alert(1);//",
+      type: 'income',
+      title: 'Bonus',
+      amount: 50000,
+      category: 'salary',
+      date: '2026-09-25'
+    },
+    {
+      id: '<script>alert(1)</script>',
+      type: 'income',
+      title: 'Bonus 2',
+      amount: 50000,
+      category: 'salary',
+      date: '2026-09-25'
+    }
+  ];
+
+  const res = validateTransactionsImport(maliciousIdData);
+  assert.strictEqual(res.valid, false);
+  assert.strictEqual(res.skipped, 2);
+});
+
 test('validateTransactionsImport mengarahkan kategori tidak dikenal ke fallback kategori', () => {
   const foreignCatData = [
     {
@@ -323,6 +350,25 @@ test('generateSampleData membuat transaksi dengan tahun dan bulan aktif', () => 
   sample.forEach(item => {
     assert.strictEqual(isValidISODate(item.date), true, `Tanggal sample ${item.date} harus valid`);
   });
+});
+
+// =============================================================================
+// 7. Pengujian Pencegahan CSV Formula Injection (sanitizeCSVCell)
+// =============================================================================
+console.log('\n7. Pengujian Pencegahan CSV Injection (sanitizeCSVCell):');
+
+test('sanitizeCSVCell memberi prefix petik tunggal pada formula berbahaya', () => {
+  assert.strictEqual(sanitizeCSVCell('=1+1'), `"\'=1+1"`);
+  assert.strictEqual(sanitizeCSVCell('@SUM(A1:A10)'), `"\'@SUM(A1:A10)"`);
+  assert.strictEqual(sanitizeCSVCell('+cmd|"/C calc"!A0'), `"\'\+cmd|""/C calc""!A0"`);
+  assert.strictEqual(sanitizeCSVCell('-2000'), `"\'\-2000"`);
+});
+
+test('sanitizeCSVCell membiarkan teks normal dan mengamankan tanda kutip dua', () => {
+  assert.strictEqual(sanitizeCSVCell('Makan Siang'), `"Makan Siang"`);
+  assert.strictEqual(sanitizeCSVCell('Beli "Kopi"'), `"Beli ""Kopi"""`);
+  assert.strictEqual(sanitizeCSVCell(null), '""');
+  assert.strictEqual(sanitizeCSVCell(undefined), '""');
 });
 
 console.log(`\n========================================`);

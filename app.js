@@ -310,6 +310,34 @@ function setupEventListeners() {
     renderTransactionsTable();
   });
 
+  // Delegated event listener untuk aksi transaksi (mencegah inline event handler XSS)
+  const handleTxActionClick = (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (btn) {
+      const action = btn.getAttribute('data-action');
+      const id = btn.getAttribute('data-id');
+      if (!id) return;
+      if (action === 'edit' && typeof openEditModal === 'function') {
+        openEditModal(id);
+      } else if (action === 'delete' && typeof confirmDelete === 'function') {
+        confirmDelete(id);
+      }
+      return;
+    }
+
+    const recentItem = e.target.closest('.recent-tx-item[data-action="edit"]');
+    if (recentItem) {
+      const id = recentItem.getAttribute('data-id');
+      if (id && typeof openEditModal === 'function') {
+        openEditModal(id);
+      }
+    }
+  };
+
+  document.getElementById('recentTransactionsList')?.addEventListener('click', handleTxActionClick);
+  document.getElementById('transactionsTableBody')?.addEventListener('click', handleTxActionClick);
+  document.getElementById('mobileTransactionsList')?.addEventListener('click', handleTxActionClick);
+
   // Modal Tambah/Edit Transaksi & Form
   document.getElementById('closeModalBtn')?.addEventListener('click', closeModal);
   document.getElementById('cancelModalBtn')?.addEventListener('click', closeModal);

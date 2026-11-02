@@ -370,8 +370,13 @@ function validateTransactionsImport(data) {
       continue;
     }
 
-    // 1. Wajib id (string tidak kosong)
-    if (typeof item.id !== 'string' || item.id.trim() === '') {
+    // 1. Wajib id (string alfanumerik aman, '-', atau '_', maks 64 karakter)
+    if (typeof item.id !== 'string') {
+      skipped++;
+      continue;
+    }
+    const cleanId = item.id.trim();
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cleanId)) {
       skipped++;
       continue;
     }
@@ -429,7 +434,7 @@ function validateTransactionsImport(data) {
     const time = typeof item.time === 'string' && item.time.trim() ? item.time.trim().slice(0, 10) : '12:00';
     const notes = typeof item.notes === 'string' ? item.notes.trim().slice(0, 500) : '';
     const title = item.title.trim().slice(0, 100);
-    const id = item.id.trim().slice(0, 100);
+    const id = cleanId;
 
     validItems.push({
       id,
