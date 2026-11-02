@@ -187,4 +187,4 @@ Proyek ini menggunakan GitHub Actions (`.github/workflows/release.yml`) untuk me
 
 ## Lisensi
 
-Didistribusikan di bawah lisensi open source [MIT](LICENSE). Hak Cipta (c) 2026 SoraDev-ID / Kontributor KeuanganKu.
+Didistribusikan di bawah lisensi open source [MIT](LICENSE). Hak Cipta (c) 2026 SoraaaID / Kontributor KeuanganKu.
