@@ -1,5 +1,6 @@
 const CACHE_PREFIX = 'keuanganku:' + self.registration.scope + ':';
-const CACHE_NAME = CACHE_PREFIX + '1';
+// Bump when a precached file changes so each worker serves one complete snapshot.
+const CACHE_NAME = CACHE_PREFIX + '3';
 const APP_URL = new URL('index.html', self.registration.scope).href;
 const CORE_ASSETS = [
   'index.html',
@@ -42,7 +43,8 @@ const CORE_ASSETS = [
 const coreAssets = new Set(CORE_ASSETS);
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(CORE_ASSETS)));
+  const requests = CORE_ASSETS.map(url => new Request(url, { cache: 'reload' }));
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(requests)));
 });
 
 self.addEventListener('activate', event => {
@@ -62,21 +64,8 @@ self.addEventListener('fetch', event => {
     && (url.href === self.registration.scope || url.href === APP_URL);
   if (!isAppPage && !coreAssets.has(request.url)) return;
 
-  const key = isAppPage ? APP_URL : request;
-  event.respondWith(caches.open(CACHE_NAME).then(async cache => {
-    let response;
-    try {
-      response = await fetch(request);
-    } catch (error) {
-      const cached = await cache.match(key);
-      if (cached) return cached;
-      throw error;
-    }
-    if (response.ok && !response.redirected) {
-      await cache.put(key, response.clone()).catch(error => {
-        console.warn('Gagal memperbarui cache offline:', error);
-      });
-    }
-    return response;
-  }));
+  const key = isAppPage ? APP_URL : request.url;
+  event.respondWith(caches.open(CACHE_NAME).then(async cache =>
+    (await cache.match(key)) || Response.error()
+  ));
 });

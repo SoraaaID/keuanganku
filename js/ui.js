@@ -15,7 +15,7 @@ function showToast(message, type = 'info', duration = 3500) {
   if (!container) return;
 
   const toast = document.createElement('div');
-  toast.className = `toast-card toast-${type}`;
+  toast.className = `toast toast-${type}`;
 
   let icon = 'fa-circle-info';
   if (type === 'success') icon = 'fa-circle-check';
@@ -506,10 +506,10 @@ function renderCategoryProgress() {
       const pct = Math.round((amt / budget) * 100);
       barWidth = Math.min(pct, 100);
 
-      if (pct > 100) {
+      if (amt > budget) {
         barColor = '#ef4444';
         statusText = `<span style="color: #ef4444; font-weight: 600;">Melebihi Anggaran (${pct}%)</span>`;
-      } else if (pct >= 80) {
+      } else if (amt / budget >= 0.8) {
         barColor = '#f59e0b';
         statusText = `<span style="color: #f59e0b; font-weight: 600;">Mendekati Batas (${pct}%)</span>`;
       } else {

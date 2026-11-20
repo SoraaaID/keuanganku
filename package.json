@@ -1,6 +1,6 @@
 {
   "name": "keuanganku",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "KeuanganKu - Aplikasi Catatan Pengeluaran & Pemasukan (Android & PWA)",
   "main": "app.js",
   "scripts": {

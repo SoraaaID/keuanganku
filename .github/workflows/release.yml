@@ -5,14 +5,18 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     name: Build and sign release
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - name: Checkout
@@ -20,15 +24,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verifikasi versi cocok dengan tag
+      - name: Tentukan dan verifikasi versi rilis
+        id: version
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
           APP_VERSION=$(grep -oP 'versionName "\K[^"]+' android/app/build.gradle)
-          echo "Tag: $TAG_VERSION | versionName: $APP_VERSION"
-          if [ "$TAG_VERSION" != "$APP_VERSION" ]; then
-            echo "::error::Tag ($TAG_VERSION) tidak sama dengan versionName di build.gradle ($APP_VERSION). Naikkan versi lalu buat tag lagi."
+          [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          RELEASE_TAG="v$APP_VERSION"
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_NAME" != "$RELEASE_TAG" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME tidak cocok dengan $RELEASE_TAG."
             exit 1
           fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -39,6 +45,8 @@ jobs:
       - name: Install dependensi & siapkan aset web
         run: |
           npm ci
+          npm test
+          npm test
           npm run build
           npx cap sync android
 
@@ -77,8 +85,10 @@ jobs:
           "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/release/app-release.apk
 
       - name: Ganti nama APK
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk "KeuanganKu-${GITHUB_REF_NAME}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "KeuanganKu-${RELEASE_TAG}.apk"
 
       - name: Hapus keystore sementara
         if: always()
@@ -88,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-apk
-          path: KeuanganKu-${{ github.ref_name }}.apk
+          path: KeuanganKu-${{ steps.version.outputs.tag }}.apk
           if-no-files-found: error
 
   publish:
@@ -106,7 +116,15 @@ jobs:
       - name: Buat GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "KeuanganKu-${GITHUB_REF_NAME}.apk" \
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            if ! gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA" --silent; then
+              EXISTING_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+              [[ "$EXISTING_SHA" == "$GITHUB_SHA" ]]
+            fi
+          fi
+          gh release create "$RELEASE_TAG" "KeuanganKu-${RELEASE_TAG}.apk" \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "KeuanganKu ${GITHUB_REF_NAME}" --generate-notes
+            --title "KeuanganKu ${RELEASE_TAG}" --generate-notes
