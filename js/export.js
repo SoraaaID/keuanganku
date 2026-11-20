@@ -308,7 +308,12 @@ async function shareFile(filename, data, mime, options = {}) {
 function generatePDFDocument() {
   const items = typeof getFilteredTransactions === 'function' ? getFilteredTransactions() : [];
   if (items.length === 0) {
-    if (typeof showToast === 'function') showToast('Tidak ada transaksi untuk dicetak ke PDF', 'danger');
+    if (typeof showToast === 'function') {
+      const message = state.transactions.length
+        ? 'Tidak ada transaksi di periode atau filter ini. Ubah pilihan untuk membuat PDF.'
+        : 'Tambahkan transaksi sebelum membuat PDF.';
+      showToast(message, 'info');
+    }
     return null;
   }
 

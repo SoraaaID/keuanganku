@@ -876,7 +876,7 @@
   </dialog>
 
   <!-- Modal: Notifikasi & Tips Finansial -->
-  <dialog id="notificationModal" class="app-modal">
+  <dialog id="notificationModal" class="app-modal" aria-labelledby="notificationTitle">
     <div class="modal-card modal-sm">
       <div class="modal-header">
         <div class="modal-title-group">
@@ -884,7 +884,7 @@
             <i class="fa-solid fa-bell"></i>
           </div>
           <div>
-            <h3 class="modal-title">Pusat Notifikasi</h3>
+            <h3 class="modal-title" id="notificationTitle">Pusat Notifikasi</h3>
             <p class="modal-subtitle">Update ringkasan & tips keuangan</p>
           </div>
         </div>
@@ -893,7 +893,7 @@
         </button>
       </div>
       <div class="notification-list" id="notificationList" style="padding: 16px 24px; display: flex; flex-direction: column; gap: 12px;">
-        <!-- Populated via JS -->
+        <p class="notification-empty">Belum ada notifikasi baru.</p>
       </div>
       <div class="modal-footer" style="padding: 14px 24px 20px;">
         <button type="button" id="dismissNotificationBtn" class="btn btn-primary" style="width: 100%;">Tutup</button>

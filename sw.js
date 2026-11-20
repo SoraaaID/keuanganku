@@ -1,6 +1,6 @@
 const CACHE_PREFIX = 'keuanganku:' + self.registration.scope + ':';
 // Bump when a precached file changes so each worker serves one complete snapshot.
-const CACHE_NAME = CACHE_PREFIX + '2';
+const CACHE_NAME = CACHE_PREFIX + '3';
 const APP_URL = new URL('index.html', self.registration.scope).href;
 const CORE_ASSETS = [
   'index.html',

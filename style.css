@@ -34,6 +34,7 @@
   --radius-lg: 20px;
   --radius-xl: 24px;
   --radius-full: 9999px;
+  --bottom-nav-height: 68px;
 
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -864,7 +865,7 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
   transform: translateX(-50%);
   width: 100%;
   max-width: 520px;
-  height: 68px;
+  height: var(--bottom-nav-height);
   background: var(--bg-surface);
   border-top: 1px solid var(--border-color);
   display: flex;
@@ -1678,7 +1679,7 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
   animation: fadeIn 0.2s ease forwards;
 }
 
-.app-modal[open] .modal-content {
+.app-modal[open] :is(.modal-content, .modal-card) {
   animation: modalScaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
@@ -1698,7 +1699,8 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
   }
 }
 
-.modal-content {
+.modal-content,
+.modal-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -1709,7 +1711,8 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
   overflow-y: auto;
 }
 
-.modal-content.modal-sm {
+.modal-content.modal-sm,
+.modal-card.modal-sm {
   max-width: 440px;
 }
 
@@ -1754,6 +1757,13 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
 .modal-subtitle {
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.notification-empty {
+  padding: 12px 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  text-align: center;
 }
 
 /* Form Styles inside Modal */
@@ -2329,8 +2339,10 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
    ========================================================================== */
 .toast-container {
   position: fixed;
-  bottom: max(env(safe-area-inset-bottom, 0px), 24px);
-  left: max(env(safe-area-inset-left, 0px), 24px);
+  bottom: calc(var(--bottom-nav-height) + max(env(safe-area-inset-bottom, 0px), 20px));
+  inset-inline-start: max(env(safe-area-inset-left, 0px), 16px);
+  inset-inline-end: max(env(safe-area-inset-right, 0px), 16px);
+  align-items: flex-start;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2352,6 +2364,12 @@ html[data-theme="dark"] .savings-status-badge.status-excellent {
   font-weight: 600;
   pointer-events: auto;
   animation: toastSlideIn 0.25s ease forwards;
+  max-width: min(100%, 420px);
+  overflow-wrap: anywhere;
+}
+
+.toast.toast-fadeout {
+  animation: fadeIn 0.3s ease reverse forwards;
 }
 
 .toast.toast-success i {

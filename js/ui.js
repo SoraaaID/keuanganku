@@ -15,7 +15,7 @@ function showToast(message, type = 'info', duration = 3500) {
   if (!container) return;
 
   const toast = document.createElement('div');
-  toast.className = `toast-card toast-${type}`;
+  toast.className = `toast toast-${type}`;
 
   let icon = 'fa-circle-info';
   if (type === 'success') icon = 'fa-circle-check';
