@@ -1,7 +1,6 @@
 package com.keuanganku.app;
 
 import android.content.Context;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.ParcelFileDescriptor;
@@ -21,6 +20,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
@@ -31,9 +31,25 @@ public class PdfPrintPlugin extends Plugin {
 
     @PluginMethod
     public void print(PluginCall call) {
-        String path = call.getString("path");
-        if (path == null || path.isEmpty()) {
-            call.reject("Path berkas PDF tidak boleh kosong");
+        String filename = call.getString("filename");
+        if (filename == null || !filename.matches(
+                "[0-9]{13}_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_KeuanganKu_Cetak\\.pdf")) {
+            call.reject("Nama laporan PDF tidak valid");
+            return;
+        }
+
+        final File report;
+        try {
+            File cache = getContext().getCacheDir().getCanonicalFile();
+            File directory = new File(cache, "keuanganku-print");
+            File expected = new File(directory, filename);
+            report = expected.getCanonicalFile();
+            if (!report.equals(expected) || !report.isFile()) {
+                call.reject("Laporan PDF tidak ditemukan di cache cetak");
+                return;
+            }
+        } catch (IOException e) {
+            call.reject("Cache cetak tidak dapat dibaca");
             return;
         }
 
@@ -70,16 +86,7 @@ public class PdfPrintPlugin extends Plugin {
                         InputStream in = null;
                         OutputStream out = null;
                         try {
-                            if (path.startsWith("content://")) {
-                                in = context.getContentResolver().openInputStream(Uri.parse(path));
-                            } else {
-                                String cleanPath = path;
-                                if (cleanPath.startsWith("file://")) {
-                                    cleanPath = Uri.parse(cleanPath).getPath();
-                                }
-                                in = new FileInputStream(new File(cleanPath));
-                            }
-
+                            in = new FileInputStream(report);
                             out = new FileOutputStream(destination.getFileDescriptor());
 
                             byte[] buffer = new byte[8192];

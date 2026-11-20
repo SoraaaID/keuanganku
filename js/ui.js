@@ -452,8 +452,11 @@ function renderCategoryProgress() {
   const container = document.getElementById('categoryProgressList');
   if (!container) return;
 
-  const currentItems = typeof getTransactionsInCurrentPeriod === 'function' ? getTransactionsInCurrentPeriod() : [];
-  const budgets = typeof loadBudgets === 'function' ? loadBudgets() : {};
+  const month = formatMonthISO(state.anchorDate);
+  const monthLabel = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(state.anchorDate);
+  const heading = `<p class="help-text">Anggaran ${monthLabel}</p>`;
+  const currentItems = state.transactions.filter(item => item.date?.startsWith(month + '-'));
+  const budgets = state.budgets;
   const expenseMap = {};
   let totalExp = 0;
 
@@ -474,7 +477,7 @@ function renderCategoryProgress() {
   });
 
   if (catList.length === 0) {
-    container.innerHTML = `
+    container.innerHTML = `${heading}
       <div style="text-align: center; padding: 28px 12px; color: var(--text-tertiary); font-size: 0.88rem;">
         <i class="fa-solid fa-wallet" style="font-size: 2rem; margin-bottom: 8px; opacity: 0.4;"></i>
         <p>Belum ada pengeluaran atau anggaran yang diatur pada periode ini.</p>
@@ -489,7 +492,7 @@ function renderCategoryProgress() {
   // Urutkan berdasarkan nominal pengeluaran terbesar
   catList.sort((a, b) => (expenseMap[b] || 0) - (expenseMap[a] || 0));
 
-  container.innerHTML = catList.map(catId => {
+  container.innerHTML = heading + catList.map(catId => {
     const info = getCategoryInfo('expense', catId);
     const amt = expenseMap[catId] || 0;
     const budget = budgets[catId] || 0;
@@ -569,7 +572,7 @@ function checkBackupReminder() {
   if (!banner) return;
 
   const txs = (typeof state !== 'undefined' && Array.isArray(state.transactions)) ? state.transactions : [];
-  if (txs.length === 0) {
+  if (txs.length === 0 && Object.keys(state.budgets).length === 0) {
     banner.classList.add('hidden');
     return;
   }
@@ -683,6 +686,7 @@ function openEditModal(id) {
   if (!item) return;
 
   state.editingId = id;
+  state.editingRevision = state.revision;
   const modal = document.getElementById('transactionModal');
   const title = document.getElementById('modalTitle');
   const idInput = document.getElementById('transactionId');
@@ -796,7 +800,8 @@ function openBudgetModal() {
   const container = document.getElementById('budgetInputsContainer');
   if (!modal || !container) return;
 
-  const budgets = typeof loadBudgets === 'function' ? loadBudgets() : {};
+  const budgets = state.budgets;
+  state.budgetRevision = state.revision;
 
   container.innerHTML = CATEGORIES.expense.map(cat => {
     const val = budgets[cat.id] || '';
@@ -820,7 +825,7 @@ function openBudgetModal() {
   container.querySelectorAll('.budget-num-input').forEach(input => {
     input.addEventListener('input', (e) => {
       const num = parseFormattedNumber(e.target.value);
-      e.target.value = num > 0 ? new Intl.NumberFormat('id-ID').format(num) : '';
+      if (num > 0) e.target.value = new Intl.NumberFormat('id-ID').format(num);
     });
   });
 
@@ -839,22 +844,28 @@ function closeBudgetModal() {
  * Menyimpan data batas anggaran bulanan dari form modal
  * @param {Event} e
  */
-function handleSaveBudgets(e) {
+async function handleSaveBudgets(e) {
   if (e) e.preventDefault();
   const container = document.getElementById('budgetInputsContainer');
   if (!container) return;
 
   const newBudgets = {};
-  container.querySelectorAll('.budget-num-input').forEach(input => {
-    const catId = input.getAttribute('data-category');
+  for (const input of container.querySelectorAll('.budget-num-input')) {
     const val = parseFormattedNumber(input.value);
-    if (catId && val > 0) {
-      newBudgets[catId] = val;
+    if (Number.isNaN(val)) {
+      showToast('Masukkan batas anggaran dalam rupiah bulat.', 'danger');
+      input.focus();
+      return;
     }
-  });
+    if (val > 0) newBudgets[input.dataset.category] = val;
+  }
 
-  if (typeof saveBudgets === 'function') {
-    saveBudgets(newBudgets);
+  try {
+    await saveBudgets(newBudgets, state.budgetRevision);
+  } catch (error) {
+    console.error('Gagal menyimpan anggaran:', error);
+    showToast('Gagal menyimpan batas anggaran: ' + error.message, 'danger');
+    return;
   }
 
   closeBudgetModal();
@@ -871,3 +882,4 @@ function refreshUI() {
   renderTransactionsTable();
   if (typeof renderCharts === 'function') renderCharts();
 }
+

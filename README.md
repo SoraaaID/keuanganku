@@ -12,7 +12,7 @@
 
 Aplikasi pencatat pemasukan dan pengeluaran harian offline-first untuk **Android & PWA** (Progressive Web App). Dibangun menggunakan arsitektur Vanilla (HTML5, Vanilla CSS, dan JavaScript murni tanpa framework tambahan) serta dibungkus dengan [Capacitor 6](https://capacitorjs.com/) menjadi aplikasi Android native yang ringan, cepat, dan mandiri.
 
-Semua data tersimpan secara lokal di perangkat Anda (`localStorage`), tanpa server backend, tanpa akun, tanpa pelacakan, dan 100% dapat digunakan tanpa koneksi internet.
+Transaksi dan anggaran tersimpan di IndexedDB pada perangkat Anda, tanpa server, akun, atau pelacakan. PWA dapat dibuka offline setelah aset selesai dicadangkan ke cache.
 
 ---
 
@@ -40,7 +40,7 @@ Semua data tersimpan secara lokal di perangkat Anda (`localStorage`), tanpa serv
 - **Visualisasi Grafik**:
   - Grafik batang dinamika arus kas masuk vs keluar (Chart.js 4.4).
   - Grafik donat komposisi pengeluaran per kategori.
-- **Anggaran Bulanan (Budgeting)**: Atur batas anggaran pengeluaran per kategori per bulan dengan indikator progres visual (normal, mendekati batas, overbudget).
+- **Anggaran Bulanan (Budgeting)**: Atur batas pengeluaran bulanan berulang per kategori. Progres dihitung untuk bulan yang ditampilkan.
 - **Rasio Tabungan Finansial**: Metrik otomatis menghitung persentase tabungan dari total pemasukan periode aktif.
 - **Ekspor & Berbagi Dokumen**:
   - Unduh dokumen laporan **PDF** (format A4 resmi dengan tabel & ringkasan metrik).
@@ -48,7 +48,9 @@ Semua data tersimpan secara lokal di perangkat Anda (`localStorage`), tanpa serv
   - Bagikan berkas PDF atau ringkasan teks rapi langsung ke WhatsApp / aplikasi lain via Share API.
   - Cetak laporan fisik via plugin Android `PrintManager`.
 - **Cadangan Data Mandiri (Backup & Restore)**:
-  - Ekspor seluruh basis data transaksi ke berkas **JSON**.
+  - Ekspor transaksi dan batas anggaran ke berkas **JSON**. Cadangan transaksi lama tetap bisa diimpor.
+  - Cadangan bisa dienkripsi dengan kata sandi minimal 12 karakter. Kata sandi yang sama diperlukan untuk pemulihan.
+  - Impor mendukung hingga 50.000 transaksi, dengan batas 10 MiB untuk JSON biasa atau 14 MiB untuk berkas terenkripsi.
   - Impor dan pulihkan data dengan validasi schema ketat serta penggabungan cerdas (mencegah tabrakan ID transaksi).
   - **Pengingat Cadangan**: Banner pengingat otomatis jika data belum dicadangkan lebih dari 30 hari (dapat disembunyikan 7 hari).
 - **Mode Tampilan**: Mode Gelap (*Dark Mode*) dan Terang (*Light Mode*) yang bersih, nyaman di mata, dan responsif.
@@ -75,7 +77,7 @@ Semua data tersimpan secara lokal di perangkat Anda (`localStorage`), tanpa serv
 | Grafik Finansial | Chart.js 4.4.1 (Bundel lokal di `vendor/`) |
 | Pembuat Dokumen PDF | jsPDF 2.5.1 + jspdf-autotable 3.8.2 |
 | Ikonografi & Tipografi | Font Awesome 6.5.1 Free, Plus Jakarta Sans Font |
-| Penyimpanan Offline | Browser `localStorage` (`keuanganku_transactions_v1`) |
+| Penyimpanan Offline | IndexedDB, dengan migrasi otomatis dari `localStorage` saat penyimpanan pertama |
 | Plugin Android Native | `@capacitor/app`, `@capacitor/filesystem`, `@capacitor/share`, `@capacitor/status-bar`, `PdfPrintPlugin` |
 
 ---

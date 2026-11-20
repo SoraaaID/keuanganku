@@ -308,29 +308,65 @@ test('validateTransactionsImport mengarahkan kategori tidak dikenal ke fallback 
 // =============================================================================
 console.log('\n5. Pengujian Penggabungan Data Aman (mergeTransactionsSafely):');
 
-test('mergeTransactionsSafely tidak menimpa data user saat ada konflik ID', () => {
-  const userExisting = [
-    { id: 'tx-sample-01', title: 'Data Pribadi User', amount: 500000, type: 'expense', date: '2026-09-20' }
-  ];
+test('impor ulang transaksi identik tidak menambah data', () => {
+  const item = { id: 'one', title: 'Belanja', amount: 50000 };
+  assert.deepStrictEqual(mergeTransactionsSafely([item], [{ ...item }]), {
+    items: [item], conflicts: 0
+  });
+});
 
-  const importedWithSameId = [
-    { id: 'tx-sample-01', title: 'Data Impor Bentrok', amount: 10000, type: 'expense', date: '2026-09-25' },
-    { id: 'tx-new-02', title: 'Data Impor Baru', amount: 20000, type: 'income', date: '2026-09-25' }
-  ];
+test('konflik impor mempertahankan transaksi lokal sampai penggantian dipilih', () => {
+  const local = { id: 'one', title: 'Belanja', amount: 50000 };
+  const backup = { ...local, amount: 20000 };
+  const extra = { id: 'two', amount: 10000 };
+  assert.deepStrictEqual(mergeTransactionsSafely([local], [backup, extra]), {
+    items: [local, extra], conflicts: 1
+  });
+  assert.deepStrictEqual(mergeTransactionsSafely([local], [backup, extra], true), {
+    items: [backup, extra], conflicts: 1
+  });
+});
 
-  const merged = mergeTransactionsSafely(userExisting, importedWithSameId);
-  assert.strictEqual(merged.length, 3);
+test('nominal rupiah menerima pemisah ribuan dan menolak format ambigu', () => {
+  assert.strictEqual(parseFormattedNumber('10.000'), 10000);
+  assert.ok(Number.isNaN(parseFormattedNumber('-5000')));
+  assert.ok(Number.isNaN(parseFormattedNumber('10,5')));
+  assert.ok(Number.isNaN(parseFormattedNumber('9007199254740992')));
+  assert.ok(Number.isNaN(parseFormattedNumber(1.25)));
+  const item = { id: 'one', type: 'expense', title: 'Tes', date: '2026-11-20', amount: '10.000' };
+  assert.strictEqual(validateTransactionsImport([item]).items[0].amount, 10000);
+  assert.strictEqual(validateTransactionsImport([{ ...item, amount: '1000abc' }]).valid, false);
+});
 
-  // Transaksi asli user tetap utuh
-  const originalUserItem = merged.find(t => t.id === 'tx-sample-01');
-  assert.ok(originalUserItem);
-  assert.strictEqual(originalUserItem.title, 'Data Pribadi User');
+test('cadangan anggaran saja dan cadangan transaksi lama dapat dibaca', () => {
+  const { getBackupJSONPayload, readBackupBudgets } = require('../js/export.js');
+  global.CATEGORIES = CATEGORIES;
+  try {
+    const budgets = { [CATEGORIES.expense[0].id]: 10000 };
+    const payload = JSON.parse(getBackupJSONPayload({ transactions: [], budgets }));
+    assert.deepStrictEqual(readBackupBudgets(payload), budgets);
+    assert.equal(validateTransactionsImport(payload).valid, true);
+    assert.equal(readBackupBudgets({ transactions: [] }), undefined);
+    assert.throws(() => readBackupBudgets({ budgets: { unknown: 100 } }), /tidak valid/);
+  } finally {
+    delete global.CATEGORIES;
+  }
+});
 
-  // Item impor dengan ID bentrok mendapatkan ID baru
-  const collidedItem = merged.find(t => t.title === 'Data Impor Bentrok');
-  assert.ok(collidedItem);
-  assert.notStrictEqual(collidedItem.id, 'tx-sample-01');
-  assert.ok(collidedItem.id.startsWith('tx_imp_'));
+test('membatalkan penggantian data contoh mempertahankan transaksi', () => {
+  const { loadSampleData } = require('../js/data.js');
+  const prior = [{ id: 'one' }];
+  const answers = [true, false, false];
+  global.state = { transactions: prior };
+  global.confirm = () => answers.shift();
+  try {
+    loadSampleData();
+    assert.strictEqual(answers.length, 0);
+    assert.strictEqual(global.state.transactions, prior);
+  } finally {
+    delete global.state;
+    delete global.confirm;
+  }
 });
 
 // =============================================================================
@@ -374,3 +410,30 @@ test('sanitizeCSVCell membiarkan teks normal dan mengamankan tanda kutip dua', (
 console.log(`\n========================================`);
 console.log(`Pengujian Selesai: ${passedTests}/${totalTests} pengujian BERHASIL.`);
 console.log(`========================================\n`);
+
+async function testBackupEncryption() {
+  const { encryptBackup, decryptBackup } = require('../js/export.js');
+  const password = 'kata sandi cadangan panjang';
+  const backup = { transactions: [], budgets: { food: 15000 } };
+  const bytes = new TextEncoder().encode(JSON.stringify(backup));
+  const first = JSON.parse(await encryptBackup(bytes, password));
+  const second = JSON.parse(await encryptBackup(bytes, password));
+
+  assert.notEqual(first.salt, second.salt);
+  assert.notEqual(first.iv, second.iv);
+  assert.deepStrictEqual(await decryptBackup(first, password), backup);
+  await assert.rejects(decryptBackup(first, 'kata sandi yang berbeda'), /salah atau.*rusak/);
+
+  const binary = atob(first.data);
+  const tampered = btoa(String.fromCharCode(binary.charCodeAt(0) ^ 1) + binary.slice(1));
+  await assert.rejects(decryptBackup({ ...first, data: tampered }, password), /salah atau.*rusak/);
+  await assert.rejects(decryptBackup({ ...first, version: 2 }, password), /Versi/);
+  await assert.rejects(encryptBackup(bytes, 'pendek'), /12 sampai 256/);
+  console.log('  ✓ enkripsi cadangan, kata sandi salah, dan perubahan ciphertext');
+}
+
+testBackupEncryption().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
