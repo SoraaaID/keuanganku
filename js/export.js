@@ -1006,7 +1006,9 @@ function handleImportJsonFile(event) {
       if (incoming.length && transactions.length) {
         const merge = confirm(
           `Gabungkan ${incoming.length} transaksi cadangan?${skipped}\n\n` +
-          'Klik Batal untuk melihat opsi penggantian.'
+          (validation.skipped
+            ? 'Cadangan dengan transaksi tidak valid hanya bisa digabungkan.'
+            : 'Klik Batal untuk melihat opsi penggantian.')
         );
         if (merge) {
           const merged = mergeTransactionsSafely(transactions, incoming);
@@ -1017,6 +1019,7 @@ function handleImportJsonFile(event) {
           changes.transactions = replace ? mergeTransactionsSafely(transactions, incoming, true).items : merged.items;
           count = changes.transactions.length - transactions.length + (replace ? merged.conflicts : 0);
         } else {
+          if (validation.skipped) return;
           overwrite = confirm(
             `Ganti semua transaksi lokal dengan ${incoming.length} transaksi cadangan?${skipped}` +
             (hasBudgetBackup ? '\nBatas anggaran lokal juga akan diganti.' : '')

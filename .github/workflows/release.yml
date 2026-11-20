@@ -39,6 +39,7 @@ jobs:
       - name: Install dependensi & siapkan aset web
         run: |
           npm ci
+          npm test
           npm run build
           npx cap sync android
 
