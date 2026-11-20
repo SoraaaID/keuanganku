@@ -8,6 +8,8 @@
 // =============================================================================
 const state = {
   transactions: [],
+  budgets: {},
+  revision: 0,
   currentPeriod: 'monthly', // Default ke bulanan
   anchorDate: new Date(),   // Tanggal hari ini agar dashboard Beranda selalu menampilkan bulan berjalan
   activeTab: 'beranda',     // 'beranda', 'transaksi', 'anggaran', 'laporan'
@@ -27,7 +29,12 @@ const state = {
 // 2. Manajemen Tema (Dark / Light Mode)
 // =============================================================================
 function initTheme() {
-  const saved = localStorage.getItem(THEME_KEY);
+  let saved;
+  try {
+    saved = localStorage.getItem(THEME_KEY);
+  } catch (error) {
+    console.error('Gagal membaca tema:', error);
+  }
   if (saved === 'dark' || saved === 'light') {
     setTheme(saved);
   } else {
@@ -38,7 +45,11 @@ function initTheme() {
 
 function setTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem(THEME_KEY, theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (error) {
+    console.error('Gagal menyimpan tema:', error);
+  }
 
   const metaTheme = document.getElementById('metaThemeColor');
   if (metaTheme) {
@@ -70,7 +81,7 @@ function toggleTheme() {
 // =============================================================================
 // 3. Form Transaksi & Aksi Data
 // =============================================================================
-function handleFormSubmit(e) {
+async function handleFormSubmit(e) {
   if (e) e.preventDefault();
 
   const typeRadio = document.querySelector('input[name="transactionType"]:checked');
@@ -83,8 +94,8 @@ function handleFormSubmit(e) {
   const title = (document.getElementById('formTitle')?.value || '').trim();
   const notes = (document.getElementById('formNotes')?.value || '').trim();
 
-  if (!amount || amount <= 0) {
-    showToast('Nominal transaksi harus lebih dari 0', 'danger');
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    showToast('Masukkan nominal rupiah bulat lebih dari 0.', 'danger');
     return;
   }
 
@@ -93,50 +104,48 @@ function handleFormSubmit(e) {
     return;
   }
 
-  if (state.editingId) {
-    const idx = state.transactions.findIndex(t => t.id === state.editingId);
-    if (idx !== -1) {
-      state.transactions[idx] = {
-        ...state.transactions[idx],
-        type,
-        date,
-        time,
-        amount,
-        category,
-        title,
-        notes
-      };
-      saveTransactions(state.transactions);
-      showToast('Transaksi berhasil diperbarui', 'success');
-    }
-  } else {
-    const newTx = {
-      id: 'tx-' + Date.now(),
-      type,
-      date,
-      time,
-      amount,
-      category,
-      title,
-      notes
-    };
-    state.transactions.unshift(newTx);
-    saveTransactions(state.transactions);
-    showToast('Transaksi baru berhasil dicatat', 'success');
+  const editing = Boolean(state.editingId);
+  const revision = editing ? state.editingRevision : state.revision;
+  const previous = state.transactions.find(item => item.id === state.editingId);
+  if (editing && !previous) {
+    showToast('Transaksi ini sudah dihapus. Tutup formulir untuk melanjutkan.', 'danger');
+    return;
   }
+
+  const transaction = {
+    id: previous?.id ?? ('tx-' + crypto.randomUUID()),
+    type, date, time, amount, category, title, notes
+  };
+  const next = editing
+    ? state.transactions.map(item => item.id === transaction.id ? transaction : item)
+    : [transaction, ...state.transactions];
+
+  if (!await persistTransactions(next, revision)) return;
+  showToast(editing ? 'Transaksi berhasil diperbarui' : 'Transaksi baru berhasil dicatat', 'success');
 
   closeModal();
   refreshUI();
 }
 
-function confirmDelete(id) {
+async function persistTransactions(items, revision = state.revision) {
+  try {
+    await saveTransactions(items, revision);
+    return true;
+  } catch (error) {
+    console.error('Gagal menyimpan transaksi:', error);
+    showToast('Gagal menyimpan transaksi: ' + error.message, 'danger');
+    return false;
+  }
+}
+
+async function confirmDelete(id) {
   const item = state.transactions.find(t => t.id === id);
   if (!item) return;
 
+  const revision = state.revision;
   const conf = confirm(`Apakah Anda yakin ingin menghapus catatan "${item.title}" (${formatRupiah(item.amount)})?`);
   if (conf) {
-    state.transactions = state.transactions.filter(t => t.id !== id);
-    saveTransactions(state.transactions);
+    if (!await persistTransactions(state.transactions.filter(t => t.id !== id), revision)) return;
     showToast('Catatan transaksi telah dihapus', 'info');
     refreshUI();
   }
@@ -358,9 +367,8 @@ function setupEventListeners() {
     if (num > 0) {
       e.target.value = new Intl.NumberFormat('id-ID').format(num);
       if (spelledOut) spelledOut.textContent = formatRupiah(num);
-    } else {
-      e.target.value = '';
-      if (spelledOut) spelledOut.textContent = '';
+    } else if (spelledOut) {
+      spelledOut.textContent = Number.isNaN(num) ? 'Masukkan nominal rupiah bulat.' : '';
     }
   });
 
@@ -404,10 +412,11 @@ function setupEventListeners() {
   document.getElementById('emptySampleDataBtn')?.addEventListener('click', loadSampleData);
 
   // Hapus Seluruh Data
-  document.getElementById('clearAllDataBtn')?.addEventListener('click', () => {
+  document.getElementById('clearAllDataBtn')?.addEventListener('click', async () => {
+    const revision = state.revision;
     const conf = confirm('Peringatan: Hapus semua catatan transaksi secara permanen? Tindakan ini tidak dapat dibatalkan.');
     if (conf) {
-      saveTransactions([]);
+      if (!await persistTransactions([], revision)) return;
       showToast('Semua data transaksi telah dihapus', 'info');
       refreshUI();
     }
@@ -531,6 +540,7 @@ function setupNetworkStatusListeners() {
 function setupPWAInstallation() {
   if (isNativePlatform()) {
     hidePwaInstallElements();
+    void pruneTemporaryExports();
     return;
   }
 
@@ -618,23 +628,37 @@ function setupPWAInstallation() {
 // =============================================================================
 // 6. Inisialisasi Saat DOM Siap (App Bootstrap)
 // =============================================================================
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   initTheme();
   state.transactions = loadTransactions();
+  state.budgets = loadBudgets();
+
+  async function refreshStoredData() {
+    const revision = state.revision;
+    try {
+      await synchronizeLedger();
+      if (state.revision !== revision) refreshUI();
+    } catch (error) {
+      console.error('Gagal membaca penyimpanan:', error);
+    }
+  }
+
+  if (typeof BroadcastChannel === 'function') {
+    state.ledgerChannel = new BroadcastChannel('keuanganku-ledger');
+    state.ledgerChannel.onmessage = refreshStoredData;
+  }
+  window.addEventListener('focus', refreshStoredData);
+  try {
+    await synchronizeLedger();
+  } catch (error) {
+    console.error('Gagal membuka penyimpanan:', error);
+    showToast('Penyimpanan tidak tersedia. Perubahan tidak dapat disimpan.', 'danger');
+  }
   populateCategoryDropdown('expense');
   populateFilterCategoryDropdown();
   setupEventListeners();
   refreshUI();
   checkBackupReminder();
-
-  // Unregister any obsolete service workers to prevent stale cache
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(registrations => {
-      for (const registration of registrations) {
-        registration.unregister();
-      }
-    }).catch(() => {});
-  }
 
   setupNetworkStatusListeners();
 
@@ -642,5 +666,11 @@ window.addEventListener('DOMContentLoaded', () => {
     hidePwaInstallElements();
   } else {
     setupPWAInstallation();
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(error => {
+        console.error('Gagal mengaktifkan cache offline:', error);
+      });
+    }
   }
 });
+

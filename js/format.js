@@ -23,9 +23,14 @@ function formatRupiah(number) {
  * @returns {number}
  */
 function parseFormattedNumber(str) {
-  if (typeof str === 'number') return Number.isFinite(str) ? Math.round(str) : 0;
-  if (!str) return 0;
-  return parseInt(str.toString().replace(/[^0-9]/g, ''), 10) || 0;
+  if (str == null || (typeof str === 'string' && str.trim() === '')) return 0;
+  let amount = str;
+  if (typeof str === 'string') {
+    const value = str.trim().replace(/^Rp\s*/i, '');
+    if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)$/.test(value)) return NaN;
+    amount = Number(value.replace(/\./g, ''));
+  }
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : NaN;
 }
 
 /**
@@ -123,3 +128,4 @@ if (typeof module !== 'undefined' && module.exports) {
     escapeHtml
   };
 }
+

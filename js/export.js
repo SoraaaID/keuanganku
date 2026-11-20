@@ -24,6 +24,36 @@ function getPdfPrintPlugin() {
   return window.Capacitor?.Plugins?.PdfPrint || null;
 }
 
+const SHARE_CACHE_DIR = 'keuanganku-share';
+const PRINT_CACHE_DIR = 'keuanganku-print';
+const TEMP_EXPORT_MAX_AGE = 24 * 60 * 60 * 1000;
+
+async function pruneTemporaryExports(Filesystem = getFilesystemPlugin()) {
+  if (!Filesystem) return;
+  const cutoff = Date.now() - TEMP_EXPORT_MAX_AGE;
+  await Promise.all([SHARE_CACHE_DIR, PRINT_CACHE_DIR].map(async directory => {
+    let entries;
+    try {
+      ({ files: entries } = await Filesystem.readdir({ path: directory, directory: 'CACHE' }));
+    } catch {
+      return; // Direktori belum ada atau sementara tidak dapat dibaca.
+    }
+    await Promise.all(entries.map(async ({ name, type }) => {
+      const stamp = /^(\d{13})_[0-9a-f-]{36}_[\w.-]+$/.exec(name);
+      if (type !== 'file' || !stamp || Number(stamp[1]) >= cutoff) return;
+      try {
+        await Filesystem.deleteFile({ path: directory + '/' + name, directory: 'CACHE' });
+      } catch (error) {
+        console.warn('Gagal membersihkan ekspor sementara:', error);
+      }
+    }));
+  }));
+}
+
+function temporaryExportPath(directory, filename) {
+  return `${directory}/${Date.now()}_${crypto.randomUUID()}_${filename}`;
+}
+
 /**
  * Konversi string base64 menjadi Blob biner
  * @param {string} base64
@@ -145,8 +175,11 @@ async function saveFile(filename, data, mime, options = {}) {
     console.warn(`Gagal menyimpan ke Documents/KeuanganKu/${filename} (${err.message}). Menjalankan fallback ke Cache & Share Sheet.`);
 
     try {
+      if (!Share || typeof Share.share !== 'function') throw err;
+      await pruneTemporaryExports(Filesystem);
+      const cachePath = temporaryExportPath(SHARE_CACHE_DIR, filename);
       const cacheWriteOptions = {
-        path: filename,
+        path: cachePath,
         data: fileData,
         directory: 'CACHE',
         recursive: true
@@ -158,23 +191,18 @@ async function saveFile(filename, data, mime, options = {}) {
       await Filesystem.writeFile(cacheWriteOptions);
 
       const cacheResult = await Filesystem.getUri({
-        path: filename,
+        path: cachePath,
         directory: 'CACHE'
       });
 
-      if (Share && typeof Share.share === 'function') {
-        if (typeof showToast === 'function') showToast('Penyimpanan publik dibatasi sistem. Membuka lembar berbagi berkas...', 'info');
-        await Share.share({
-          title: options.title || filename,
-          text: options.text || '',
-          dialogTitle: options.dialogTitle || 'Simpan / Bagikan Berkas',
-          files: [cacheResult.uri]
-        });
-        return { success: true, method: 'cache-share', uri: cacheResult.uri };
-      } else {
-        if (typeof showToast === 'function') showToast(`Tersimpan di cache perangkat: ${filename}`, 'info');
-        return { success: true, method: 'cache-only', uri: cacheResult.uri };
-      }
+      if (typeof showToast === 'function') showToast('Penyimpanan publik dibatasi sistem. Membuka lembar berbagi berkas...', 'info');
+      await Share.share({
+        title: options.title || filename,
+        text: options.text || '',
+        dialogTitle: options.dialogTitle || 'Simpan / Bagikan Berkas',
+        files: [cacheResult.uri]
+      });
+      return { success: true, method: 'cache-share', uri: cacheResult.uri };
     } catch (fallbackErr) {
       console.error('Fallback penyimpanan gagal:', fallbackErr);
       if (typeof showToast === 'function') showToast('Gagal menyimpan berkas: ' + fallbackErr.message, 'danger');
@@ -237,8 +265,10 @@ async function shareFile(filename, data, mime, options = {}) {
   }
 
   try {
+    await pruneTemporaryExports(Filesystem);
+    const cachePath = temporaryExportPath(SHARE_CACHE_DIR, filename);
     const writeOptions = {
-      path: filename,
+      path: cachePath,
       data: fileData,
       directory: 'CACHE',
       recursive: true
@@ -250,7 +280,7 @@ async function shareFile(filename, data, mime, options = {}) {
     await Filesystem.writeFile(writeOptions);
 
     const uriResult = await Filesystem.getUri({
-      path: filename,
+      path: cachePath,
       directory: 'CACHE'
     });
 
@@ -699,18 +729,135 @@ async function exportToCSV() {
   }
 }
 
+const BACKUP_MAX_BYTES = 10 * 1024 * 1024;
+const BACKUP_MAX_FILE_BYTES = 14 * 1024 * 1024;
+const BACKUP_MAX_TRANSACTIONS = 50000;
+const BACKUP_PBKDF2_ITERATIONS = 600000;
+
+function encodeBackupBytes(bytes) {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
+}
+
+function decodeBackupBytes(value) {
+  if (typeof value !== 'string') throw new Error('Format cadangan terenkripsi tidak valid.');
+  return Uint8Array.from(atob(value), character => character.charCodeAt(0));
+}
+
+async function deriveBackupKey(password, salt) {
+  if (!globalThis.crypto?.subtle) throw new Error('Enkripsi membutuhkan konteks yang aman.');
+  const input = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: BACKUP_PBKDF2_ITERATIONS },
+    input, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptBackup(plaintext, password) {
+  if (!password || password.length < 12 || password.length > 256) {
+    throw new Error('Kata sandi cadangan harus berisi 12 sampai 256 karakter.');
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveBackupKey(password, salt);
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  return JSON.stringify({
+    format: 'KeuanganKu-encrypted',
+    version: 1,
+    salt: encodeBackupBytes(salt),
+    iv: encodeBackupBytes(iv),
+    data: encodeBackupBytes(new Uint8Array(data))
+  });
+}
+
+async function decryptBackup(envelope, password) {
+  if (envelope.version !== 1) throw new Error('Versi cadangan terenkripsi tidak didukung.');
+  if (!password || password.length > 256) throw new Error('Kata sandi cadangan tidak valid.');
+  try {
+    const salt = decodeBackupBytes(envelope.salt);
+    const iv = decodeBackupBytes(envelope.iv);
+    const data = decodeBackupBytes(envelope.data);
+    if (salt.length !== 16 || iv.length !== 12 || data.length <= 16 || data.length > BACKUP_MAX_BYTES + 16) {
+      throw new Error('Ukuran cadangan terenkripsi tidak valid.');
+    }
+    const key = await deriveBackupKey(password, salt);
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plaintext));
+  } catch {
+    throw new Error('Kata sandi salah atau cadangan terenkripsi rusak.');
+  }
+}
+
+function chooseBackupPassword(forExport) {
+  const dialog = document.createElement('dialog');
+  dialog.setAttribute('aria-label', forExport ? 'Lindungi cadangan' : 'Buka cadangan terenkripsi');
+  dialog.innerHTML = `
+    <form method="dialog">
+      <p>${forExport ? 'Lindungi cadangan dengan kata sandi. Simpan kata sandi untuk pemulihan.' : 'Masukkan kata sandi cadangan.'}</p>
+      <label>Kata sandi <input type="password" name="password" required maxlength="256"
+        ${forExport ? 'minlength="12" autocomplete="new-password"' : 'autocomplete="current-password"'}></label>
+      ${forExport ? '<label>Ulangi kata sandi <input type="password" name="repeat" required maxlength="256" autocomplete="new-password"></label>' : ''}
+      <button type="submit" value="encrypted">${forExport ? 'Enkripsi' : 'Buka'}</button>
+      ${forExport ? '<button type="submit" formnovalidate value="plaintext">Simpan tanpa enkripsi</button>' : ''}
+      <button type="submit" formnovalidate value="cancel">Batal</button>
+    </form>`;
+  const form = dialog.querySelector('form');
+  const password = form.elements.namedItem('password');
+  const repeat = form.elements.namedItem('repeat');
+  repeat?.addEventListener('input', () => repeat.setCustomValidity(''));
+  password.addEventListener('input', () => repeat?.setCustomValidity(''));
+  form.addEventListener('submit', event => {
+    if (event.submitter?.value === 'encrypted' && repeat && repeat.value !== password.value) {
+      event.preventDefault();
+      repeat.setCustomValidity('Kata sandi tidak sama.');
+      repeat.reportValidity();
+    }
+  });
+  document.body.append(dialog);
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => {
+      const result = dialog.returnValue === 'encrypted' ? password.value
+        : dialog.returnValue === 'plaintext' ? '' : null;
+      dialog.remove();
+      resolve(result);
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+
+async function prepareBackupExport(snapshot) {
+  if (snapshot.transactions.length > BACKUP_MAX_TRANSACTIONS) {
+    throw new Error('Data melebihi batas 50.000 transaksi.');
+  }
+  const json = getBackupJSONPayload(snapshot);
+  const plaintext = new TextEncoder().encode(json);
+  if (plaintext.length > BACKUP_MAX_BYTES) {
+    throw new Error('Data melebihi batas ukuran cadangan.');
+  }
+  const password = await chooseBackupPassword(true);
+  if (password === null) return null;
+  const data = password ? await encryptBackup(plaintext, password) : json;
+  const suffix = password ? '_Terenkripsi' : '';
+  return { data, filename: `KeuanganKu_Backup_${formatDateISO(new Date())}${suffix}.json` };
+}
+
 /**
  * Payload JSON data transaksi aplikasi
  * @returns {string}
  */
-function getBackupJSONPayload() {
-  const txs = (typeof state !== 'undefined' && Array.isArray(state.transactions)) ? state.transactions : [];
+function getBackupJSONPayload({ transactions, budgets }) {
   return JSON.stringify({
     app: 'KeuanganKu',
-    version: '1.0.3',
+    schemaVersion: 2,
     exportDate: new Date().toISOString(),
-    totalTransactions: txs.length,
-    transactions: txs
+    totalTransactions: transactions.length,
+    transactions,
+    budgets
   }, null, 2);
 }
 
@@ -718,17 +865,17 @@ function getBackupJSONPayload() {
  * Cadangkan Data (.json): simpan lewat helper dan catat timestamp backup
  */
 async function exportToJSON() {
-  const txs = (typeof state !== 'undefined' && Array.isArray(state.transactions)) ? state.transactions : [];
-  if (txs.length === 0) {
-    if (typeof showToast === 'function') showToast('Tidak ada data transaksi untuk diekspor', 'danger');
+  const { transactions, budgets } = state;
+  if (transactions.length === 0 && Object.keys(budgets).length === 0) {
+    if (typeof showToast === 'function') showToast('Tidak ada transaksi atau anggaran untuk dicadangkan', 'danger');
     return;
   }
 
   try {
-    const jsonStr = getBackupJSONPayload();
-    const filename = `KeuanganKu_Backup_${formatDateISO(new Date())}.json`;
+    const backup = await prepareBackupExport({ transactions, budgets });
+    if (!backup) return;
 
-    const res = await saveFile(filename, jsonStr, 'application/json;charset=utf-8', {
+    const res = await saveFile(backup.filename, backup.data, 'application/json;charset=utf-8', {
       base64: false,
       title: 'Cadangan Data KeuanganKu',
       dialogTitle: 'Simpan Cadangan JSON'
@@ -750,20 +897,20 @@ async function exportToJSON() {
  * Simpan ke Google Drive / bagikan cadangan data (.json)
  */
 async function shareJSONBackup() {
-  const txs = (typeof state !== 'undefined' && Array.isArray(state.transactions)) ? state.transactions : [];
-  if (txs.length === 0) {
-    if (typeof showToast === 'function') showToast('Tidak ada data transaksi untuk dicadangkan', 'danger');
+  const { transactions, budgets } = state;
+  if (transactions.length === 0 && Object.keys(budgets).length === 0) {
+    if (typeof showToast === 'function') showToast('Tidak ada transaksi atau anggaran untuk dicadangkan', 'danger');
     return;
   }
 
   try {
-    const jsonStr = getBackupJSONPayload();
-    const filename = `KeuanganKu_Backup_${formatDateISO(new Date())}.json`;
+    const backup = await prepareBackupExport({ transactions, budgets });
+    if (!backup) return;
 
-    const res = await shareFile(filename, jsonStr, 'application/json;charset=utf-8', {
+    const res = await shareFile(backup.filename, backup.data, 'application/json;charset=utf-8', {
       base64: false,
       title: 'Cadangan Data KeuanganKu',
-      text: `Berkas cadangan data transaksi KeuanganKu (${txs.length} transaksi).`,
+      text: `Berkas cadangan KeuanganKu (${transactions.length} transaksi dan batas anggaran).`,
       dialogTitle: 'Simpan ke Google Drive / Bagikan'
     });
 
@@ -794,12 +941,32 @@ function importFromJSON() {
  * Membaca dan memulihkan transaksi dari berkas cadangan JSON dengan validasi schema ketat
  * dan pencegahan tabrakan ID secara aman
  */
+function readBackupBudgets(backup) {
+  if (!Object.hasOwn(backup, 'budgets')) return undefined;
+  const budgets = backup.budgets;
+  if (!budgets || typeof budgets !== 'object' || Array.isArray(budgets)) {
+    throw new Error('Format anggaran dalam cadangan tidak valid.');
+  }
+  const categories = new Set(CATEGORIES.expense.map(category => category.id));
+  for (const [category, amount] of Object.entries(budgets)) {
+    if (!categories.has(category) || !Number.isSafeInteger(amount) || amount <= 0) {
+      throw new Error('Kategori atau nominal anggaran dalam cadangan tidak valid.');
+    }
+  }
+  return budgets;
+}
+
 function handleImportJsonFile(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
+  if (file.size > BACKUP_MAX_FILE_BYTES) {
+    showToast('Berkas cadangan melebihi batas 14 MiB.', 'danger');
+    event.target.value = '';
+    return;
+  }
 
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       let parsed;
       try {
@@ -808,55 +975,78 @@ function handleImportJsonFile(event) {
         throw new Error('Berkas bukan format JSON yang valid.');
       }
 
-      // Validasi ketat menggunakan validateTransactionsImport
+      if (parsed?.format === 'KeuanganKu-encrypted') {
+        const password = await chooseBackupPassword(false);
+        if (password === null) return;
+        parsed = await decryptBackup(parsed, password);
+      } else if (file.size > BACKUP_MAX_BYTES) {
+        throw new Error('Cadangan tanpa enkripsi melebihi batas 10 MiB.');
+      }
+      const rawTransactions = Array.isArray(parsed) ? parsed : parsed?.transactions;
+      if (rawTransactions?.length > BACKUP_MAX_TRANSACTIONS) {
+        throw new Error('Cadangan melebihi batas 50.000 transaksi.');
+      }
       const validation = validateTransactionsImport(parsed);
-      if (!validation.valid || validation.items.length === 0) {
-        throw new Error(validation.error || 'Validasi schema gagal.');
+      if (!validation.valid) throw new Error(validation.error);
+      const backupBudgets = readBackupBudgets(parsed);
+      const unique = mergeTransactionsSafely([], validation.items);
+      if (unique.conflicts > 0) {
+        throw new Error('Berkas berisi transaksi berbeda dengan ID yang sama.');
       }
+      const incoming = unique.items;
+      const { transactions, budgets, revision } = state;
+      const hasBudgetBackup = backupBudgets !== undefined;
+      if (!incoming.length && !hasBudgetBackup) throw new Error('Cadangan tidak berisi data.');
 
-      const validItems = validation.items;
-      const skippedCount = validation.skipped;
-      const skippedNote = skippedCount > 0 ? `\n(${skippedCount} data tidak valid dilewati)` : '';
+      const changes = {};
+      let count = incoming.length;
+      let overwrite = false;
+      const skipped = validation.skipped ? ` (${validation.skipped} transaksi tidak valid dilewati)` : '';
 
-      const currentTxs = (typeof state !== 'undefined' && Array.isArray(state.transactions)) ? state.transactions : [];
-
-      if (currentTxs.length > 0) {
-        const mergeChoice = confirm(
-          `Ditemukan ${validItems.length} transaksi valid di berkas cadangan.${skippedNote}\n\n` +
-          `• Klik "OK" untuk MENGGABUNGKAN (Merge) dengan data yang ada saat ini (aman, ID duplikat akan disesuaikan).\n` +
-          `• Klik "Batal" untuk memilih opsi Menimpa Seluruh Data atau Batal.`
+      if (incoming.length && transactions.length) {
+        const merge = confirm(
+          `Gabungkan ${incoming.length} transaksi cadangan?${skipped}\n\n` +
+          'Klik Batal untuk melihat opsi penggantian.'
         );
-
-        let resultData = [];
-        if (mergeChoice) {
-          resultData = mergeTransactionsSafely(currentTxs, validItems);
-        } else {
-          const overwriteChoice = confirm(
-            `Apakah Anda ingin MENIMPA SELURUH DATA yang ada saat ini dengan data dari berkas cadangan (${validItems.length} transaksi valid)?${skippedNote}\n\n` +
-            `PERINGATAN: Semua catatan transaksi yang ada saat ini (${currentTxs.length} transaksi) akan digantikan!`
+        if (merge) {
+          const merged = mergeTransactionsSafely(transactions, incoming);
+          const replace = merged.conflicts > 0 && confirm(
+            `${merged.conflicts} transaksi memiliki ID yang sama dengan isi berbeda.\n\n` +
+            'Klik OK untuk memakai versi cadangan, atau Batal untuk mempertahankan versi lokal.'
           );
-          if (overwriteChoice) {
-            resultData = validItems;
-          } else {
-            if (typeof showToast === 'function') showToast('Impor berkas cadangan dibatalkan', 'info');
-            event.target.value = '';
-            return;
-          }
+          changes.transactions = replace ? mergeTransactionsSafely(transactions, incoming, true).items : merged.items;
+          count = changes.transactions.length - transactions.length + (replace ? merged.conflicts : 0);
+        } else {
+          overwrite = confirm(
+            `Ganti semua transaksi lokal dengan ${incoming.length} transaksi cadangan?${skipped}` +
+            (hasBudgetBackup ? '\nBatas anggaran lokal juga akan diganti.' : '')
+          );
+          if (!overwrite) return;
         }
-
-        saveTransactions(resultData);
-      } else {
-        saveTransactions(validItems);
+      }
+      if (incoming.length && (!transactions.length || overwrite)) changes.transactions = incoming;
+      if (hasBudgetBackup) {
+        const next = overwrite ? backupBudgets : { ...budgets, ...backupBudgets };
+        const conflicts = !overwrite && Object.keys(backupBudgets).some(key =>
+          Object.hasOwn(budgets, key) && budgets[key] !== backupBudgets[key]);
+        changes.budgets = conflicts && !confirm(
+          'Cadangan berisi batas anggaran yang berbeda. Klik OK untuk memakai batas cadangan, atau Batal untuk mempertahankan batas lokal.'
+        ) ? { ...backupBudgets, ...budgets } : next;
       }
 
-      setLastBackupTimestamp(Date.now());
-      if (typeof refreshUI === 'function') refreshUI();
-      if (typeof closeExportModal === 'function') closeExportModal();
+      const budgetsChanged = hasBudgetBackup && (
+        Object.keys(changes.budgets).length !== Object.keys(budgets).length ||
+        Object.keys(changes.budgets).some(key => changes.budgets[key] !== budgets[key])
+      );
+      if (!count) delete changes.transactions;
+      if (!budgetsChanged) delete changes.budgets;
+      if (count || budgetsChanged) await saveLedger(changes, revision);
 
-      const skippedToast = skippedCount > 0 ? ` (${skippedCount} data tidak valid dilewati)` : '';
-      if (typeof showToast === 'function') {
-        showToast(`Berhasil memulihkan ${validItems.length} transaksi cadangan!${skippedToast}`, 'success');
-      }
+      refreshUI();
+      closeExportModal();
+      showToast(count || budgetsChanged
+        ? `Pemulihan selesai. ${count} transaksi dipulihkan${budgetsChanged ? ' dan anggaran diperbarui' : ''}.${skipped}`
+        : 'Tidak ada perubahan dari cadangan ini.', count || budgetsChanged ? 'success' : 'info');
     } catch (err) {
       console.error('Gagal mengimpor JSON:', err);
       if (typeof showToast === 'function') showToast('Gagal memulihkan data: ' + err.message, 'danger');
@@ -909,23 +1099,19 @@ async function printReport() {
     const doc = generatePDFDocument();
     if (!doc) return;
 
-    const filename = `KeuanganKu_Cetak_${Date.now()}.pdf`;
+    await pruneTemporaryExports(Filesystem);
+    const cachePath = temporaryExportPath(PRINT_CACHE_DIR, 'KeuanganKu_Cetak.pdf');
     const dataUri = doc.output('datauristring');
     const base64Data = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
 
     await Filesystem.writeFile({
-      path: filename,
+      path: cachePath,
       data: base64Data,
       directory: 'CACHE',
       recursive: true
     });
 
-    const uriResult = await Filesystem.getUri({
-      path: filename,
-      directory: 'CACHE'
-    });
-
-    await PdfPrint.print({ path: uriResult.uri });
+    await PdfPrint.print({ filename: cachePath.split('/').pop() });
   } catch (err) {
     console.error('Gagal mencetak laporan via PdfPrint:', err);
     if (typeof showToast === 'function') showToast('Gagal memproses cetak: ' + err.message, 'danger');
@@ -936,6 +1122,11 @@ async function printReport() {
 // Ekspor untuk pengujian Node.js jika CommonJS
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    sanitizeCSVCell
+    sanitizeCSVCell,
+    getBackupJSONPayload,
+    readBackupBudgets,
+    encryptBackup,
+    decryptBackup
   };
 }
+

@@ -72,16 +72,8 @@ function loadTransactions() {
  * Menyimpan daftar transaksi ke localStorage
  * @param {Array<Object>} txs
  */
-function saveTransactions(txs) {
-  try {
-    const data = Array.isArray(txs) ? txs : [];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    if (typeof state !== 'undefined') {
-      state.transactions = data;
-    }
-  } catch (e) {
-    console.error('Gagal menyimpan transaksi ke localStorage:', e);
-  }
+function saveTransactions(transactions, revision = state.revision) {
+  return saveLedger({ transactions }, revision);
 }
 
 /**
@@ -104,13 +96,79 @@ function loadBudgets() {
  * Menyimpan data batas anggaran bulanan ke localStorage
  * @param {Record<string, number>} budgets
  */
-function saveBudgets(budgets) {
-  try {
-    const data = budgets && typeof budgets === 'object' && !Array.isArray(budgets) ? budgets : {};
-    localStorage.setItem(BUDGET_KEY, JSON.stringify(data));
-  } catch (e) {
-    console.error('Gagal menyimpan anggaran:', e);
+function saveBudgets(budgets, revision = state.revision) {
+  return saveLedger({ budgets }, revision);
+}
+
+let databasePromise;
+
+function openLedger() {
+  if (!databasePromise) {
+    databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open('keuanganku', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('ledger');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    }).catch(error => {
+      databasePromise = undefined;
+      throw error;
+    });
   }
+  return databasePromise;
+}
+
+async function readLedger() {
+  const db = await openLedger();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('ledger').objectStore('ledger').get('current');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function applyLedger(ledger) {
+  if (!ledger || ledger.revision <= state.revision) return;
+  state.revision = ledger.revision;
+  state.transactions = ledger.transactions;
+  state.budgets = ledger.budgets;
+}
+
+async function synchronizeLedger() {
+  applyLedger(await readLedger());
+}
+
+async function saveLedger(changes, expectedRevision = state.revision) {
+  const db = await openLedger();
+  const result = await new Promise((resolve, reject) => {
+    const transaction = db.transaction('ledger', 'readwrite');
+    const store = transaction.objectStore('ledger');
+    const request = store.get('current');
+    let current;
+    let next;
+
+    request.onsuccess = () => {
+      current = request.result;
+      const revision = current?.revision ?? 0;
+      if (revision !== expectedRevision) return;
+      next = {
+        transactions: current?.transactions ?? loadTransactions(),
+        budgets: current?.budgets ?? loadBudgets(),
+        ...changes,
+        revision: revision + 1
+      };
+      store.put(next, 'current');
+    };
+    transaction.oncomplete = () => resolve({ current, next });
+    transaction.onabort = () => reject(transaction.error || new Error('Penyimpanan dibatalkan.'));
+  });
+
+  if (!result.next) {
+    applyLedger(result.current);
+    refreshUI();
+    throw new Error('Data berubah sejak tindakan ini dimulai. Periksa data terbaru dan buka ulang formulir bila perlu.');
+  }
+  applyLedger(result.next);
+  if (state.ledgerChannel) state.ledgerChannel.postMessage('updated');
 }
 
 /**
@@ -394,8 +452,9 @@ function validateTransactionsImport(data) {
     }
 
     // 4. Wajib amount (angka terbatas >= 0)
-    const amt = typeof item.amount === 'number' ? item.amount : parseFloat(item.amount);
-    if (!Number.isFinite(amt) || amt < 0) {
+    const amt = parseTransactionAmount(item.amount);
+    if (item.amount == null || (typeof item.amount === 'string' && !item.amount.trim())
+      || !Number.isSafeInteger(amt)) {
       skipped++;
       continue;
     }
@@ -448,7 +507,7 @@ function validateTransactionsImport(data) {
     });
   }
 
-  if (validItems.length === 0) {
+  if (validItems.length === 0 && itemsArray.length > 0) {
     const extra = skipped > 0 ? ` (${skipped} data tidak valid dilewati)` : '';
     return {
       valid: false,
@@ -466,68 +525,64 @@ function validateTransactionsImport(data) {
 }
 
 /**
- * Menggabungkan transaksi impor dengan data yang sudah ada.
- * Mencegah konflik ID: jika ID sudah ada di data user, buat ID baru untuk data impor.
- * @param {Array<Object>} currentTxs
- * @param {Array<Object>} importedTxs
- * @returns {Array<Object>}
+ * Gabungkan transaksi berdasarkan ID. Konflik mempertahankan data lokal
+ * kecuali pengguna memilih untuk menggantinya.
  */
-function mergeTransactionsSafely(currentTxs, importedTxs) {
-  const existingList = Array.isArray(currentTxs) ? [...currentTxs] : [];
-  const existingIds = new Set(existingList.map(t => t.id));
-  let counter = 1;
+function mergeTransactionsSafely(currentTxs, importedTxs, replaceConflicts = false) {
+  const items = [...currentTxs];
+  const indexById = new Map();
+  items.forEach((item, index) => {
+    if (!indexById.has(item.id)) indexById.set(item.id, index);
+  });
+  const fields = ['type', 'date', 'time', 'amount', 'category', 'title', 'notes'];
+  let conflicts = 0;
 
   for (const item of importedTxs) {
-    let itemToMerge = { ...item };
-    if (existingIds.has(itemToMerge.id)) {
-      // Regenerate ID agar tidak menimpa data transaksi user
-      const suffix = Math.random().toString(36).substring(2, 7);
-      itemToMerge.id = `tx_imp_${Date.now()}_${counter++}_${suffix}`;
+    const index = indexById.get(item.id);
+    if (index === undefined) {
+      indexById.set(item.id, items.length);
+      items.push(item);
+      continue;
     }
-    existingIds.add(itemToMerge.id);
-    existingList.push(itemToMerge);
+    if (fields.every(field => items[index][field] === item[field])) continue;
+    conflicts++;
+    if (replaceConflicts) items[index] = item;
   }
 
-  return existingList;
+  return { items, conflicts };
 }
 
 /**
- * Memuat sample data dengan dialog konfirmasi 2 langkah (muat / merge vs replace)
+ * Muat data contoh setelah pengguna memilih gabung atau konfirmasi penggantian.
  */
-function loadSampleData() {
+async function loadSampleData() {
+  const revision = state.revision;
   const sample = generateSampleData();
-  const currentCount = state && Array.isArray(state.transactions) ? state.transactions.length : 0;
+  let items = sample;
+  let message = 'Berhasil memuat data percontohan!';
 
-  if (currentCount > 0) {
-    const confirmStep1 = confirm(
-      `Saat ini sudah ada ${currentCount} transaksi tersimpan.\n\n` +
-      `Apakah Anda ingin memuat data percontohan?`
-    );
-    if (!confirmStep1) return;
-
-    const confirmMerge = confirm(
-      `Pilih cara memuat data percontohan:\n\n` +
-      `• Klik "OK" untuk MENGGABUNGKAN (Merge) contoh dengan data Anda saat ini.\n` +
-      `• Klik "Batal" untuk MENIMPA (Replace) seluruh transaksi dengan data contoh.`
-    );
-
-    if (confirmMerge) {
-      const merged = mergeTransactionsSafely(state.transactions, sample);
-      saveTransactions(merged);
-      if (typeof refreshUI === 'function') refreshUI();
-      if (typeof showToast === 'function') showToast(`Berhasil menambahkan ${sample.length} transaksi contoh!`, 'success');
+  if (state.transactions.length > 0) {
+    if (!confirm('Muat data percontohan? Anda akan memilih cara memuatnya.')) return;
+    if (confirm('Gabungkan data contoh dengan transaksi yang ada? Klik Batal untuk melihat opsi penggantian.')) {
+      items = mergeTransactionsSafely(state.transactions, sample).items;
+      message = 'Data contoh telah digabungkan.';
     } else {
-      saveTransactions(sample);
-      if (typeof refreshUI === 'function') refreshUI();
-      if (typeof showToast === 'function') showToast('Seluruh data diganti dengan data contoh.', 'info');
+      if (!confirm('Ganti seluruh transaksi yang ada dengan data contoh? Klik Batal untuk membatalkan.')) return;
+      message = 'Seluruh transaksi diganti dengan data contoh.';
     }
-  } else {
-    const confirmLoad = confirm(`Muat ${sample.length} data transaksi contoh untuk melihat simulasi dashboard dan laporan?`);
-    if (!confirmLoad) return;
-    saveTransactions(sample);
-    if (typeof refreshUI === 'function') refreshUI();
-    if (typeof showToast === 'function') showToast('Berhasil memuat data percontohan!', 'success');
+  } else if (!confirm('Muat data percontohan untuk melihat simulasi dashboard dan laporan?')) {
+    return;
   }
+
+  try {
+    await saveTransactions(items, revision);
+  } catch (error) {
+    console.error('Gagal menyimpan data contoh:', error);
+    showToast('Gagal menyimpan data contoh: ' + error.message, 'danger');
+    return;
+  }
+  refreshUI();
+  showToast(message, 'success');
 }
 
 /**
@@ -615,6 +670,9 @@ function getFilteredTransactions() {
 }
 
 // Ekspor untuk environment Node.js (pengujian unit test)
+const parseTransactionAmount = typeof module !== 'undefined' && module.exports
+  ? require('./format.js').parseFormattedNumber : parseFormattedNumber;
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CATEGORIES,
@@ -641,3 +699,4 @@ if (typeof module !== 'undefined' && module.exports) {
     getFilteredTransactions
   };
 }
+
